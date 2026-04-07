@@ -85,6 +85,73 @@ def sanitize_aws_error(error: Exception) -> str:
     # For other exceptions, return generic message
     return 'An error occurred while processing your request.'
 
+def get_days_in_month(date: datetime) -> int:
+    """Get number of days in the given month."""
+    if date.month == 12:
+        next_month = date.replace(year=date.year + 1, month=1, day=1)
+    else:
+        next_month = date.replace(month=date.month + 1, day=1)
+    
+    last_day_of_month = next_month - timedelta(days=1)
+    return last_day_of_month.day
+
+
+def get_month_start_end(date: datetime) -> tuple[str, str]:
+    """Get start and end dates for the given month in AWS format."""
+    start_date = date.replace(day=1).strftime("%Y-%m-%d")
+    
+    # Last day of month
+    if date.month == 12:
+        next_month = date.replace(year=date.year + 1, month=1, day=1)
+    else:
+        next_month = date.replace(month=date.month + 1, day=1)
+    
+    end_date = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
+    return start_date, end_date
+
+
+def subtract_months(date: datetime, months: int) -> datetime:
+    """Subtract months from a date properly handling year boundaries."""
+    year = date.year
+    month = date.month - months
+    
+    # Handle year rollover
+    while month <= 0:
+        year -= 1
+        month += 12
+    
+    # Handle day overflow (e.g., Jan 31 -> Feb 28/29)
+    day = date.day
+    if month == 2:  # February
+        max_day = 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28
+        day = min(day, max_day)
+    elif month in [4, 6, 9, 11]:  # 30-day months
+        day = min(day, 30)
+    
+    return date.replace(year=year, month=month, day=day)
+
+
+def safe_get_amount(result: dict) -> float:
+    """Safely extract amount from AWS Cost Explorer result."""
+    try:
+        amount_str = result.get("Total", {}).get("UnblendedCost", {}).get("Amount")
+        if amount_str is None:
+            return 0.0
+        return float(amount_str)
+    except (ValueError, TypeError, KeyError):
+        return 0.0
+
+
+def safe_get_group_amount(group: dict) -> float:
+    """Safely extract amount from AWS Cost Explorer group result."""
+    try:
+        amount_str = group.get("Metrics", {}).get("UnblendedCost", {}).get("Amount")
+        if amount_str is None:
+            return 0.0
+        return float(amount_str)
+    except (ValueError, TypeError, KeyError):
+        return 0.0
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,7 +275,7 @@ def calculate_total(response: dict) -> float:
 
     total = 0.0
     for result in response.get("ResultsByTime", []):
-        amount = float(result["Total"]["UnblendedCost"]["Amount"])
+        amount = safe_get_amount(result)
         total += amount
     return total
 
@@ -230,7 +297,7 @@ def get_service_costs(config: dict) -> list[tuple[str, float]]:
     services = []
     for result in response.get("ResultsByTime", []):
         for group in result.get("Groups", []):
-            amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
+            amount = safe_get_group_amount(group)
             if amount > 0:
                 services.append((group["Keys"][0], amount))
 
@@ -428,7 +495,7 @@ def get_daily_costs(config: dict, days: int = 30) -> List[Dict[str, Any]]:
 
     daily = []
     for result in response.get("ResultsByTime", []):
-        amount = float(result["Total"]["UnblendedCost"]["Amount"])
+        amount = safe_get_amount(result)
         daily.append({
             "date": result["TimePeriod"]["Start"],
             "amount": amount,
@@ -588,8 +655,7 @@ def forecast(ctx, format):
     click.echo("🔮 Calculating cost forecast...")
     today = datetime.now()
     # Determine days in current month
-    next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
-    days_in_month = (next_month - timedelta(days=1)).day
+    days_in_month = get_days_in_month(today)
     days_elapsed = today.day
     daily_costs = get_daily_costs(config, days=days_elapsed)
     if not daily_costs:
@@ -637,7 +703,8 @@ def history(ctx, months, format):
     click.echo(f"📊 Fetching {months} months of cost history...")
     client = get_ce_client(config)
     today = datetime.now()
-    start_date = (today.replace(day=1) - timedelta(days=months*31)).strftime("%Y-%m-%d")
+    start_month = subtract_months(today.replace(day=1), months)
+    start_date = start_month.strftime("%Y-%m-%d")
     end_date = today.strftime("%Y-%m-%d")
     response = client.get_cost_and_usage(
         TimePeriod={"Start": start_date, "End": end_date},
@@ -646,7 +713,7 @@ def history(ctx, months, format):
     )
     monthly_data = []
     for result in response.get("ResultsByTime", []):
-        amount = float(result["Total"]["UnblendedCost"]["Amount"])
+        amount = safe_get_amount(result)
         period_start = datetime.strptime(result["TimePeriod"]["Start"], "%Y-%m-%d")
         monthly_data.append({
             "month": period_start.strftime("%Y-%m"),
