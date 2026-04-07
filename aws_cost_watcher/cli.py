@@ -177,6 +177,7 @@ def load_config(config_path: Optional[Path] = None) -> dict:
         "region": "us-east-1",
         "profile": None,
         "dry_run": False,
+        "use_emoji": False,
     }
 
     # Try to load from file
@@ -311,6 +312,30 @@ def get_service_costs(config: dict) -> list[tuple[str, float]]:
 def format_currency(amount: float) -> str:
     """Format amount as currency."""
     return f"${amount:,.2f}"
+
+def get_icon(icon_type: str, use_emoji: bool = True) -> str:
+    """Get icon/emoji for output formatting."""
+    icons = {
+        "search": ("🔍", "[SEARCH]"),
+        "chart": ("📊", "[CHART]"),
+        "calendar": ("📅", "[DATE]"),
+        "check": ("✅", "[OK]"),
+        "error": ("❌", "[ERROR]"),
+        "warning": ("⚠️", "[WARN]"),
+        "critical": ("🚨", "[CRIT]"),
+        "bell": ("🔔", "[ALERT]"),
+        "rocket": ("🚀", "[SETUP]"),
+        "phone": ("📱", "[NOTIFY]"),
+        "lightbulb": ("💡", "[TIP]"),
+        "crystal_ball": ("🔮", "[FORECAST]"),
+        "trend_up": ("📈", "[UP]"),
+        "trend_down": ("📉", "[DOWN]"),
+        "arrow_right": ("➡️", "[->]"),
+        "test": ("🧪", "[TEST]"),
+        "money": ("💰", "[$]"),
+    }
+    emoji, text = icons.get(icon_type, ("", ""))
+    return emoji if use_emoji else text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -510,8 +535,9 @@ def get_daily_costs(config: dict, days: int = 30) -> List[Dict[str, Any]]:
 @click.group()
 @click.option("--config", "-c", type=click.Path(path_type=Path), help="Config file path")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.option("--emoji", is_flag=True, help="Use emoji icons in output")
 @click.pass_context
-def cli(ctx, config, verbose):
+def cli(ctx, config, verbose, emoji):
     """AWS Cost Watcher - Monitor your AWS spending."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.WARNING,
@@ -520,6 +546,8 @@ def cli(ctx, config, verbose):
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config(config)
     ctx.obj["verbose"] = verbose
+    if emoji:
+        ctx.obj["config"]["use_emoji"] = True
 
 
 @cli.command()
@@ -542,7 +570,7 @@ def check(ctx, budget, region, profile, dry_run):
     if dry_run:
         config["dry_run"] = True
 
-    click.echo("🔍 Checking AWS costs...")
+    click.echo(f"{get_icon('search', config.get('use_emoji', False))} Checking AWS costs...")
 
     # Check credentials first
     if not check_credentials(config):
@@ -553,12 +581,12 @@ def check(ctx, budget, region, profile, dry_run):
         response = get_costs(config)
         monthly_total = calculate_total(response)
 
-        click.echo(f"📅 This month: {format_currency(monthly_total)}")
+        click.echo(f"{get_icon('calendar', config.get('use_emoji', False))} This month: {format_currency(monthly_total)}")
 
         # Get service breakdown
         services = get_service_costs(config)
         if services:
-            click.echo("\n📊 Top services:")
+            click.echo(f"\n{get_icon('chart', config.get('use_emoji', False))} Top services:")
             for svc, amount in services[:5]:
                 click.echo(f"   {svc}: {format_currency(amount)}")
 
@@ -599,12 +627,12 @@ def alert(ctx, budget, region, profile):
         sys.exit(1)
 
     click.echo(f"📊 Current month cost: {format_currency(current)}")
-    click.echo(f"🔔 Budget alert set: {format_currency(budget)}")
+    click.echo(f"{get_icon('bell', config.get('use_emoji', False))} Budget alert set: {format_currency(budget)}")
 
     if current >= budget:
         notify(config, current, budget)
     else:
-        click.echo(f"✅ You have {format_currency(budget - current)} remaining")
+        click.echo(f"{get_icon('check', config.get('use_emoji', False))} You have {format_currency(budget - current)} remaining")
 
 
 @cli.command()
@@ -616,7 +644,7 @@ def services(ctx):
     if not check_credentials(config):
         sys.exit(1)
 
-    click.echo("🔍 Fetching service costs...")
+    click.echo(f"{get_icon('search', config.get('use_emoji', False))} Fetching service costs...")
 
     try:
         services = get_service_costs(config)
@@ -807,6 +835,7 @@ def init(ctx, force):
         click.echo("❌ Invalid Discord webhook URL")
         return
     slack_url = click.prompt("Slack webhook URL", default="", show_default=False)
+    use_emoji = click.confirm("Use emoji icons in output?", default=False)
     if slack_url and not validate_webhook_url(slack_url):
         click.echo("❌ Invalid Slack webhook URL")
         return
@@ -817,6 +846,7 @@ def init(ctx, force):
         config_data["webhook_url"] = discord_url
     if slack_url:
         config_data["slack_webhook_url"] = slack_url
+    config_data["use_emoji"] = use_emoji
     config_data["thresholds"] = [
         {"percent": 80, "level": "warning", "emoji": "⚠️", "message": "Approaching budget"},
         {"percent": 100, "level": "critical", "emoji": "🚨", "message": "Budget exceeded"},

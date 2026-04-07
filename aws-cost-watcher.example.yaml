@@ -19,4 +19,6 @@ region: "us-east-1"
 # profile: "default"
 
 # Dry run mode - simulates alerts without sending (optional)
-# dry_run: false
+# dry_run: false-e 
+# Use emoji icons in CLI output (optional, default: false)
+# use_emoji: true
