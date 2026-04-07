@@ -1,0 +1,22 @@
+# AWS Cost Watcher Configuration Example
+# Copy to aws-cost-watcher.yaml and customize
+
+# Budget threshold for alerts (optional)
+budget: 100.0
+
+# Discord webhook URL (optional)
+# Get from: Discord Server Settings > Integrations > Webhooks
+webhook_url: "https://discord.com/api/webhooks/..."
+
+# Slack webhook URL (optional)
+# Get from: Slack App > Incoming Webhooks
+slack_webhook_url: "https://hooks.slack.com/services/..."
+
+# AWS region (optional, default: us-east-1)
+region: "us-east-1"
+
+# AWS profile (optional, uses default if not set)
+# profile: "default"
+
+# Dry run mode - simulates alerts without sending (optional)
+# dry_run: false
