@@ -8,7 +8,6 @@ import sys
 import json
 import logging
 from pathlib import Path
-import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -17,74 +16,6 @@ import boto3
 from botocore.exceptions import ClientError, ProfileNotFound, NoCredentialsError
 
 logger = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Security & Validation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def validate_webhook_url(url: str) -> bool:
-    """Validate webhook URL is safe (prevent SSRF)."""
-    if not url or not url.strip():
-        return True  # Empty URLs are okay
-    
-    try:
-        parsed = urllib.parse.urlparse(url)
-        
-        # Only allow HTTP/HTTPS
-        if parsed.scheme not in {'http', 'https'}:
-            return False
-        
-        # Must have a netloc (domain)
-        if not parsed.netloc:
-            return False
-        
-        # Block localhost, private IPs (basic SSRF protection)
-        hostname = parsed.hostname
-        if hostname:
-            # Block localhost variants
-            if hostname.lower() in {'localhost', '127.0.0.1', '0.0.0.0'}:
-                return False
-            # Block private IP ranges (basic check)
-            if hostname.startswith(('192.168.', '10.', '172.16.', '172.17.', '172.18.', '172.19.')):
-                return False
-        
-        return True
-        
-    except Exception:
-        return False
-
-
-def validate_budget(budget_str: str) -> Optional[float]:
-    """Safely validate and convert budget string to float."""
-    try:
-        budget = float(budget_str)
-        # Budget must be positive and reasonable (max $1M/month)
-        if budget <= 0 or budget > 1_000_000:
-            return None
-        return budget
-    except (ValueError, TypeError):
-        return None
-
-
-def sanitize_aws_error(error: Exception) -> str:
-    """Sanitize AWS error messages to avoid info disclosure."""
-    if isinstance(error, ClientError):
-        error_code = error.response.get('Error', {}).get('Code', 'Unknown')
-        
-        # Safe error messages that don't leak info
-        safe_messages = {
-            'AccessDenied': 'Access denied to AWS Cost Explorer. Check IAM permissions.',
-            'InvalidParameterValue': 'Invalid parameter provided to AWS API.',
-            'ThrottlingException': 'AWS API rate limit exceeded. Please try again later.',
-            'ServiceUnavailable': 'AWS service temporarily unavailable.',
-            'UnauthorizedOperation': 'Insufficient permissions for this operation.',
-        }
-        
-        return safe_messages.get(error_code, 'AWS API error occurred. Check your configuration.')
-    
-    # For other exceptions, return generic message
-    return 'An error occurred while processing your request.'
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,17 +58,11 @@ def load_config(config_path: Optional[Path] = None) -> dict:
 
     # Override with environment variables
     if os.environ.get("DISCORD_WEBHOOK_URL"):
-        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
-        if webhook_url and validate_webhook_url(webhook_url):
-            config["webhook_url"] = webhook_url
+        config["webhook_url"] = os.environ.get("DISCORD_WEBHOOK_URL")
     if os.environ.get("SLACK_WEBHOOK_URL"):
-        slack_url = os.environ.get("SLACK_WEBHOOK_URL")
-        if slack_url and validate_webhook_url(slack_url):
-            config["slack_webhook_url"] = slack_url
+        config["slack_webhook_url"] = os.environ.get("SLACK_WEBHOOK_URL")
     if os.environ.get("AWS_COST_BUDGET"):
-        budget_val = validate_budget(os.environ.get("AWS_COST_BUDGET"))
-        if budget_val is not None:
-            config["budget"] = budget_val
+        config["budget"] = float(os.environ.get("AWS_COST_BUDGET"))
     if os.environ.get("AWS_PROFILE"):
         config["profile"] = os.environ.get("AWS_PROFILE")
 
@@ -177,7 +102,7 @@ def check_credentials(config: dict) -> bool:
         if error_code == "AccessDeniedException":
             click.echo("❌ Access denied to AWS Cost Explorer. Check IAM permissions.", err=True)
         else:
-            click.echo(f"❌ {sanitize_aws_error(e)}", err=True)
+            click.echo(f"❌ AWS Error: {e}", err=True)
         return False
     except Exception as e:
         click.echo(f"❌ Unexpected error: {e}", err=True)
@@ -502,7 +427,7 @@ def check(ctx, budget, region, profile, dry_run):
             click.echo("💡 Set --budget to enable alerts")
 
     except ClientError as e:
-        click.echo(f"❌ {sanitize_aws_error(e)}", err=True)
+        click.echo(f"❌ AWS Error: {e}", err=True)
         sys.exit(1)
 
 
@@ -528,7 +453,7 @@ def alert(ctx, budget, region, profile):
         response = get_costs(config)
         current = calculate_total(response)
     except ClientError as e:
-        click.echo(f"❌ {sanitize_aws_error(e)}", err=True)
+        click.echo(f"❌ AWS Error: {e}", err=True)
         sys.exit(1)
 
     click.echo(f"📊 Current month cost: {format_currency(current)}")
@@ -570,7 +495,7 @@ def services(ctx):
         click.echo(f"\n   Total: {format_currency(total)}")
 
     except ClientError as e:
-        click.echo(f"❌ {sanitize_aws_error(e)}", err=True)
+        click.echo(f"❌ AWS Error: {e}", err=True)
         sys.exit(1)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -736,13 +661,7 @@ def init(ctx, force):
     profile = click.prompt("AWS profile (optional)", default="", show_default=False)
     click.echo("\n📱 Notification setup (optional):")
     discord_url = click.prompt("Discord webhook URL", default="", show_default=False)
-    if discord_url and not validate_webhook_url(discord_url):
-        click.echo("❌ Invalid Discord webhook URL")
-        return
     slack_url = click.prompt("Slack webhook URL", default="", show_default=False)
-    if slack_url and not validate_webhook_url(slack_url):
-        click.echo("❌ Invalid Slack webhook URL")
-        return
     config_data = {"budget": budget, "region": region}
     if profile:
         config_data["profile"] = profile
